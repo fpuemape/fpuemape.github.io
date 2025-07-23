@@ -1,0 +1,6 @@
+---
+title: "CV"
+format: html
+---
+
+Mi CV académico estará disponible aquí pronto.
