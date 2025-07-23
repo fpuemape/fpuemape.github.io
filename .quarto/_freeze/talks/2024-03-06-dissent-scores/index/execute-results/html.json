@@ -1,0 +1,14 @@
+{
+  "hash": "6d42e013aef662666f3e1a56ca96314a",
+  "result": {
+    "markdown": "---\ntitle: \"Dissent Scores @ Connected_Politics\"\ndescription: \"A talk at the March 6, 2024, meeting of the Connected_Politics Lab.\"\nauthor: \"Carlisle Rainey\"\ndate: \"2024-03-06\"\nimage: dissent-scores.png\n---\n\n\n\n## Most relevant links\n\n- [slides](https://www.dropbox.com/s/apf0qg3369weghb/dissent-scores.pdf?raw=1)\n- [preprint](https://osf.io/preprints/socarxiv/dw7np)\n- [project website](https://www.carlislerainey.com/dissent-scores/)\n- [data set](https://doi.org/10.7910/DVN/CL4CA8)\n\n## Code to download data\n\n\n::: {.cell}\n\n```{.r .cell-code}\n# load packages\nlibrary(tidyverse)\nlibrary(dataverse)\n\n# get the dissent score data set from dataverse\ndissent <- get_dataframe_by_name(\n  filename = \"dissent-scores.tab\",\n  dataset  = \"doi:10.7910/DVN/CL4CA8\",\n  server   = \"dataverse.harvard.edu\", \n  original = TRUE, \n  .f = readr::read_csv) |> \n  glimpse()\n```\n:::\n\n\n## Other links\n\n- `gamson.csv` is available [here](https://pos3713.github.io/data/gamson.csv), via the [data sets](https://pos3713.github.io/data.html) for my undergraduate research methods class. \n- \"Data and Code Availability in Political Science Publications from 1995 to 2022\" [[DOI](https://osf.io/preprints/socarxiv/a5yxe)]\n- \"The Data Availability Policies of Political Science Journals\" [[DOI](https://osf.io/preprints/socarxiv/df2ya)]\n",
+    "supporting": [],
+    "filters": [
+      "rmarkdown/pagebreak.lua"
+    ],
+    "includes": {},
+    "engineDependencies": {},
+    "preserve": {},
+    "postProcess": true
+  }
+}

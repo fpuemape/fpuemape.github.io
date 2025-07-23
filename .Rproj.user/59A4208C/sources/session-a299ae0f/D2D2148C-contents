@@ -1,0 +1,21 @@
+---
+title: ""  # Keep blank to suppress name rendering
+image: felix.jpg
+about:
+  id: hero-heading
+  template: trestles
+  image-shape: rectangle
+  links:
+    - icon: envelope
+      text: "Contact: fpuemape@temple.edu"
+      href: mailto:fpuemape@temple.edu
+---
+
+:::: {#hero-heading}
+I hold a Ph.D. in Political Science from Temple University, where I specialized in comparative politics and international relations, with a regional emphasis on Latin America. I also earned an M.A. in Political Science from Temple and a B.A. in Political Science from the Pontificia Universidad Católica del Perú.
+
+My research explores the political determinants of public sector human capital—particularly how political instability, executive corruption, ideology, and socio-political identities shape the recruitment and retention of tertiary-educated professionals for elected and non-elected positions. I employ a mixed-methods approach that combines observational analysis, ethnographic fieldwork, and experimental research.
+
+I have taught courses at both public and private universities in the United States and Latin America.
+::::
+

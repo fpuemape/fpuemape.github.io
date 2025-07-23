@@ -1,0 +1,14 @@
+{
+  "listingMap": {
+    "research/index.qmd": [
+      "publications",
+      "research/publications.bib"
+    ],
+    "talks/index.qmd": [
+      "B3049D40"
+    ],
+    "blog/index.qmd": [
+      "B3049D40"
+    ]
+  }
+}

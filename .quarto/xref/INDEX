@@ -1,0 +1,44 @@
+{
+  "email-list/index.qmd": {
+    "index.html": "334c42b1"
+  },
+  "index.qmd": {
+    "index.html": "d30fedf0"
+  },
+  "research/index.qmd": {
+    "index.html": "281a0e14"
+  },
+  "talks/2023-topic-sampling/index.qmd": {
+    "index.html": "72ec66c4"
+  },
+  "talks/2024-03-02-topic-sampling/index.qmd": {
+    "index.html": "764008c9"
+  },
+  "talks/2024-03-06-dissent-scores/index.qmd": {
+    "index.html": "3d32f2f1"
+  },
+  "talks/2024-10-01-power-rules-uga/index.qmd": {
+    "index.html": "2c3473a1"
+  },
+  "talks/2024-topic-sampling/index.qmd": {
+    "index.html": "06262877"
+  },
+  "talks/2025-01-11-power-rules-spsa/index.qmd": {
+    "index.html": "7b01524d"
+  },
+  "talks/index.qmd": {
+    "index.html": "ac97247d"
+  },
+  "teaching/index.qmd": {
+    "index.html": "ae3f2963"
+  },
+  "teaching/pols-209/index.qmd": {
+    "index.html": "4d218f0b"
+  },
+  "blog/index.qmd": {
+    "index.html": "9512d0c3"
+  },
+  "cv/index.qmd": {
+    "index.html": "87b59a2c"
+  }
+}
