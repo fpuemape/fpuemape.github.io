@@ -3,4 +3,4 @@ title: "Félix Puémape"
 format: html
 ---
 
-Welcome to my academic website.
+Welcome to my academic website
