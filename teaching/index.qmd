@@ -1,0 +1,33 @@
+---
+title: "Teaching"
+page-layout: full
+---
+
+Below are some of the courses I have taught. You can download the syllabi by clicking the links.
+
+## Courses
+
+- **Intro to International Relations / Global Politics**  
+  [Download Syllabus (PDF)](syllabusGP.pdf)  
+  _Temple University (Fall 2021)_  
+  _Washington and Lee University (Fall 2024, Winter 2025)_
+
+- **Applied Statistics**  
+  [Download Syllabus (PDF)](syllabusAS.pdf)  
+  _Washington and Lee University – (Fall 2024, Winter 2025)_
+
+- **Comedy and Politics**  
+  [Download Syllabus (PDF)](syllabusCAP.pdf)  
+  _Washington and Lee University (Spring / Summer 2025)_
+
+- **War and Peace**  
+  [Download Syllabus (PDF)](syllabusWAP.pdf)  
+  _Temple University – (Spring 2024)_
+
+- **Intro to Comparative Politics**  
+  [Download Syllabus (PDF)](syllabusCP.pdf)  
+  _Sample Syllabus for future courses_
+
+- **Latin American Politics**  
+  [Download Syllabus (PDF)](syllabusLAP.pdf)  
+  _Sample Syllabus for future courses_
