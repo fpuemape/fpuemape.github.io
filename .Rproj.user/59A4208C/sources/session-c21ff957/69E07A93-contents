@@ -1,0 +1,119 @@
+/* ====================================
+   Profile image & About section
+   ==================================== */
+
+/* Resize profile image to align with text height */
+.about-hero .about-image img {
+  max-width: 250px;
+  height: auto;
+}
+
+/* Align image and text vertically in the about section */
+.about-hero {
+  display: flex;
+  align-items: center;
+}
+
+/* Optional: add spacing between image and text */
+.about-hero .about-image {
+  margin-right: 2rem;
+}
+
+/* Hide the "About" heading below the image */
+.about-hero .about-title {
+  display: none;
+}
+
+/* ====================================
+   Navbar link custom color (OSF link)
+   ==================================== */
+.navbar-nav .nav-link[href="https://osf.io/preprints/osf/5am9q"] {
+  color: #18bc9c !important;
+  font-weight: bold;
+}
+.navbar-nav .nav-link[href="https://osf.io/preprints/osf/5am9q"]:hover {
+  color: #e74c3c !important;
+}
+
+/* Hide the top page title (e.g., "Curriculum Vitae") */
+.page-title {
+  display: none;
+}
+
+/* ====================================
+   Bridge rules for Quarto trestles
+   ==================================== */
+
+/* Resize profile image (trestles layout) */
+.quarto-about-trestles .about-image {
+  max-width: 250px !important;
+  height: auto !important;
+  margin-right: 2rem;
+}
+
+/* Align image + text side by side (trestles) */
+.quarto-about-trestles .about-entity {
+  display: flex;
+  align-items: center;
+}
+
+/* Hide Quarto's title block at the top */
+.quarto-title-block .title,
+h1.title.page-title {
+  display: none !important;
+}
+
+/* ====================================
+   Font overrides (match live look)
+   ==================================== */
+:root {
+  --bs-body-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                          "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans",
+                          "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+body {
+  font-family: var(--bs-body-font-family) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ====================================
+   About links styling
+   ==================================== */
+.quarto-about-trestles .about-links .about-link {
+  color: inherit;
+  text-decoration: none;
+}
+.quarto-about-trestles .about-links .about-link:hover,
+.quarto-about-trestles .about-links .about-link:focus {
+  text-decoration: underline;
+}
+
+/* ====================================
+   Force Navbar to Match Live Site
+   ==================================== */
+
+/* Background pure black-ish */
+.navbar {
+  background-color: #212529 !important;
+}
+
+/* Brand + links white */
+.navbar .navbar-brand,
+.navbar .nav-link {
+  color: #ffffff !important;
+  font-weight: 500;
+}
+
+/* Hover/focus color */
+.navbar .nav-link:hover,
+.navbar .nav-link:focus {
+  color: #f8f9fa !important;
+}
+
+/* Active link styling */
+.navbar .nav-link.active {
+  color: #ffffff !important;
+  font-weight: 600;
+}
+

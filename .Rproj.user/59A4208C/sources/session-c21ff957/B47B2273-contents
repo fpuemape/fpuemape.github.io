@@ -1,0 +1,1049 @@
+# ========================= 0) SETUP =========================
+rm(list = ls(all = TRUE))
+
+# ---- paths (edit as needed) ----
+DATA_XLSX <- "/Users/fpuemape/Desktop/ideo_database.xlsx"
+WDIR      <- "/Users/fpuemape/Desktop"
+
+# ---- packages ----
+need <- c(
+  "readxl","janitor","dplyr","tidyr","stringr","purrr","tibble",
+  "e1071","zoo","ggplot2","car","fixest","modelsummary","readr",
+  "broom","ggrepel","DataExplorer","plm","lmtest","kableExtra","relaimpo"
+)
+new  <- need[!need %in% installed.packages()[, "Package"]]
+if(length(new)) install.packages(new, quiet = TRUE)
+invisible(lapply(need, library, character.only = TRUE))
+
+# ---- working dir & outputs ----
+setwd(WDIR)
+dir.create("results", showWarnings = FALSE)
+# split outputs for paper vs appendix
+dir.create("results/main", showWarnings = FALSE)
+dir.create("results/main/figs", showWarnings = FALSE)
+dir.create("results/main/tables", showWarnings = FALSE)
+dir.create("results/main/csv", showWarnings = FALSE)
+dir.create("results/appendix", showWarnings = FALSE)
+dir.create("results/appendix/figs", showWarnings = FALSE)
+dir.create("results/appendix/tables", showWarnings = FALSE)
+dir.create("results/appendix/csv", showWarnings = FALSE)
+
+# ========================= 1A) IMPORT & HEADER RESCUE =========================
+d <- readxl::read_excel(DATA_XLSX)
+names(d) <- trimws(names(d))
+nmL      <- tolower(gsub("\\s+", " ", names(d)))
+
+cand_patterns <- c("^leader$", "^leader_name$", "leader\\b",
+                   "chief.*executive", "head.*(state|government)",
+                   "prime.*minister", "^president$", "^pm$", "pm.*president")
+cand <- unique(unlist(lapply(cand_patterns, function(p) grep(p, nmL, value = TRUE))))
+if (!"leader" %in% nmL && length(cand)) {
+  names(d)[match(cand[1], nmL)] <- "leader"
+  message("Renamed column '", cand[1], "' to 'leader'.")
+}
+if (!"leader" %in% tolower(names(d))) {
+  sheets <- readxl::excel_sheets(DATA_XLSX)
+  hdrs   <- lapply(sheets, function(sh) trimws(names(readxl::read_excel(DATA_XLSX, sheet = sh, n_max = 0))))
+  has_leader <- vapply(hdrs, function(h) any(grepl("\\bleader\\b", tolower(h))), logical(1))
+  hit <- sheets[has_leader]
+  if (length(hit)) {
+    d <- readxl::read_excel(DATA_XLSX, sheet = hit[1])
+    names(d) <- trimws(names(d))
+    nmL <- tolower(gsub("\\s+", " ", names(d)))
+    if (!"leader" %in% nmL) {
+      idx <- match(grep("\\bleader\\b", nmL, value = TRUE)[1], nmL)
+      names(d)[idx] <- "leader"
+    }
+    message("Reloaded from sheet: ", hit[1], " (with 'leader').")
+  } else {
+    audit <- do.call(
+      rbind,
+      Map(function(sh, h) data.frame(sheet = sh, idx = seq_along(h), name = h, lower = tolower(h)),
+          sheets, hdrs)
+    )
+    utils::write.csv(audit, "results/appendix/csv/audit_headers_all_sheets.csv", row.names = FALSE)
+    stop("No sheet with a 'leader' column found. See results/appendix/csv/audit_headers_all_sheets.csv")
+  }
+}
+if ("leader" %in% tolower(names(d)) && !"leader" %in% names(d)) {
+  names(d)[match("leader", tolower(names(d)))] <- "leader"
+}
+
+# Panel keys
+pick <- function(...) { x <- c(...); y <- x[x %in% names(d)]; if(length(y)) y[1] else NULL }
+id_var   <- if ("country_name" %in% names(d)) "country_name" else pick("country","vdem_country_name")
+time_var <- if ("year" %in% names(d)) "year" else pick("yr")
+if (is.null(id_var) || is.null(time_var)) stop("Couldn't find country or year column.")
+
+d[[time_var]] <- as.integer(d[[time_var]])
+d <- d %>% arrange(.data[[id_var]], .data[[time_var]])
+message("Years: ", paste(range(d[[time_var]], na.rm = TRUE), collapse = "–"),
+        " | Countries: ", dplyr::n_distinct(d[[id_var]]))
+
+# ========================= 1B) VAR PICKS =========================
+has  <- function(v) !is.null(v) && v %in% names(d)
+
+# Core DV & IVs
+dv        <- pick("v2exl_legitideol","ideology")
+execorr   <- pick("v2x_execorr","v2excrptps")
+poly      <- pick("v2x_polyarchy")
+censor    <- pick("v2mecenefm")
+
+# Theory block
+polar_pol <- pick("v2cacamps")
+polar_soc <- pick("v2smpolsoc")
+mobil     <- pick("v2cagenmob")
+linkage   <- pick("v2psprlnks")
+branches  <- pick("v2psprbrch")
+
+# Competitiveness & institutions
+house_comp <- pick("house_race","leg_comp")
+pres_comp  <- pick("pres_race")
+elec_sys   <- pick("v2elparlel","house_system")
+
+# Covariates
+gini        <- pick("gini","gini_index")
+gdp_var     <- pick("gdp_pc","gdppc","gdp_per_capita","wb_gdppc","gdp")
+civsoc_var  <- pick("v2x_cspart","v2csstruc","civil_society")
+
+# Optional controls
+libdem  <- pick("v2x_libdem")
+legcon  <- pick("v2xlg_legcon")
+jucon   <- pick("v2x_jucon")
+civilwar<- pick("e_civil_war","conflict")
+
+# ========================= 1C) QUICK DIAGNOSTICS SNAPSHOT =========================
+infer_scale <- function(x){
+  if(!is.numeric(x)) return("non-numeric")
+  mn <- suppressWarnings(min(x, na.rm=TRUE)); mx <- suppressWarnings(max(x, na.rm=TRUE))
+  nun <- dplyr::n_distinct(x, na.rm=TRUE)
+  if(nun==2) return("binary 0/1")
+  if(mn>=0 && mx<=1) return("index 0–1")
+  if(mn>=0 && mx<=100 && nun>2) return("0–100 scale")
+  "numeric"
+}
+first_last_year <- function(v){
+  ok <- !is.na(v) & !is.na(d[[time_var]])
+  c(first = suppressWarnings(min(d[[time_var]][ok])),
+    last  = suppressWarnings(max(d[[time_var]][ok])))
+}
+
+vars <- c(dv, execorr, poly, censor, polar_pol, polar_soc, mobil, linkage, branches,
+          gini, house_comp, pres_comp, elec_sys, civilwar, gdp_var, civsoc_var,
+          libdem, legcon, jucon)
+vars <- vars[!is.na(vars) & vars %in% names(d)]
+diag_list <- lapply(vars, function(v){
+  x <- d[[v]]
+  data.frame(
+    variable = v,
+    type = class(x)[1],
+    n = length(x),
+    non_null = sum(!is.na(x)),
+    pct_missing = round(mean(is.na(x))*100,2),
+    n_unique = dplyr::n_distinct(x, na.rm=TRUE),
+    min = if(is.numeric(x)) suppressWarnings(min(x, na.rm=TRUE)) else NA,
+    max = if(is.numeric(x)) suppressWarnings(max(x, na.rm=TRUE)) else NA,
+    skew = if(is.numeric(x)) suppressWarnings(e1071::skewness(x, na.rm=TRUE, type=2)) else NA,
+    scale = infer_scale(x),
+    first_nonmissing_year = first_last_year(x)[1],
+    last_nonmissing_year  = first_last_year(x)[2],
+    row.names = NULL
+  )
+})
+diag_tbl <- dplyr::bind_rows(diag_list)
+write.csv(diag_tbl, "results/appendix/csv/diagnostics_table.csv", row.names = FALSE)
+
+# ========================= 2) TRANSFORMATIONS =========================
+d <- d %>% arrange(.data[[id_var]], .data[[time_var]])
+
+# DV z-score
+if (has(dv) && !"v2exl_legitideol_z" %in% names(d)) {
+  d$v2exl_legitideol_z <- as.numeric(scale(d[[dv]]))
+}
+
+# Baseline flag
+if (!"baseline_1990plus" %in% names(d)) d$baseline_1990plus <- d[[time_var]] >= 1990
+
+# Helpers
+logit01 <- function(x, eps = 1e-6){ x <- pmin(pmax(x, eps), 1-eps); log(x/(1-x)) }
+mk_lag  <- function(var){
+  if (has(var) && !has(paste0(var,"_l1"))) {
+    d <<- d %>% group_by(.data[[id_var]]) %>%
+      mutate(!!paste0(var,"_l1") := dplyr::lag(.data[[var]], 1)) %>% ungroup()
+  }
+}
+mk_logit <- function(var){
+  if (has(var) && !has(paste0(var,"_logit"))) {
+    d[[paste0(var,"_logit")]] <<- logit01(d[[var]])
+  }
+}
+for (v in c(execorr, censor, polar_pol, polar_soc, mobil, linkage, branches, civsoc_var, civilwar)) mk_lag(v)
+for (v in c(execorr, censor, polar_pol, mobil, linkage, branches, civsoc_var, poly, libdem, legcon, jucon)) mk_logit(v)
+
+# GDP & Gini
+if (has(gdp_var) && !has(paste0(gdp_var,"_log"))) {
+  x <- suppressWarnings(as.numeric(d[[gdp_var]])); x[x < 0] <- NA_real_
+  d[[paste0(gdp_var,"_log")]] <- log1p(x)
+}
+if (has(gini) && !has(paste0(gini,"_01")) && suppressWarnings(max(d[[gini]], na.rm=TRUE)) > 1.01) {
+  d[[paste0(gini,"_01")]] <- d[[gini]]/100
+}
+
+# Election competitiveness carry-forward
+carry_elec <- function(level){
+  comp <- if (level == "house") house_comp else pres_comp
+  if (!has(comp)) return(invisible(NULL))
+  comp_last <- paste0(level,"_comp_last")
+  elec_year <- paste0(level,"_elec_year")
+  year_last <- paste0(level,"_year_last")
+  yrs_since <- paste0(level,"_years_since")
+  nonelec   <- paste0(level,"_nonelec")
+  d <<- d %>%
+    group_by(.data[[id_var]]) %>%
+    arrange(.data[[time_var]], .by_group = TRUE) %>%
+    mutate(
+      !!elec_year := !is.na(.data[[comp]]),
+      !!comp_last := zoo::na.locf(.data[[comp]], na.rm = FALSE),
+      !!year_last := ifelse(.data[[elec_year]], .data[[time_var]], NA_integer_)
+    ) %>%
+    tidyr::fill(dplyr::all_of(year_last), .direction = "down") %>%
+    mutate(
+      !!yrs_since := ifelse(!is.na(.data[[year_last]]),
+                            .data[[time_var]] - .data[[year_last]], NA_integer_),
+      !!nonelec   := as.integer(!.data[[elec_year]])
+    ) %>% ungroup()
+}
+carry_elec("house"); carry_elec("pres")
+
+# Electoral system steps + reform years
+if (has(elec_sys)) {
+  step_col   <- paste0(elec_sys, "_step")
+  reform_col <- paste0(elec_sys, "_reform_year")
+  if (!has(step_col)) {
+    d <- d %>% group_by(.data[[id_var]]) %>%
+      arrange(.data[[time_var]], .by_group = TRUE) %>%
+      mutate(!!step_col := .data[[elec_sys]]) %>%
+      tidyr::fill(dplyr::all_of(step_col), .direction = "downup") %>%
+      ungroup()
+  }
+  if (!has(reform_col)) {
+    d <- d %>% group_by(.data[[id_var]]) %>%
+      arrange(.data[[time_var]], .by_group = TRUE) %>%
+      mutate(!!reform_col := .data[[step_col]] != dplyr::lag(.data[[step_col]])) %>%
+      ungroup()
+  }
+}
+
+# Conflict availability
+if (!"conflict_available" %in% names(d) && has(civilwar)) {
+  d$conflict_available <- !is.na(d[[civilwar]]) | !is.na(d[[paste0(civilwar,"_l1")]])
+}
+
+# ========================= 2B) LEADER-TERM PANEL ENRICHMENT =========================
+if ("leader" %in% names(d)) {
+  d <- d %>%
+    arrange(.data[[id_var]], .data[[time_var]]) %>%
+    group_by(.data[[id_var]]) %>%
+    mutate(
+      leader = as.character(leader),
+      leader_change = ifelse(is.na(leader), NA,
+                             ifelse(is.na(dplyr::lag(leader)), TRUE, leader != dplyr::lag(leader))),
+      leader_term = cumsum(ifelse(is.na(leader_change), 0L, as.integer(leader_change) & !is.na(leader))),
+      leader_term_id = ifelse(is.na(leader), NA_character_,
+                              paste(.data[[id_var]], leader, leader_term, sep=" | ")),
+      leader_id      = ifelse(is.na(leader), NA_character_,
+                              paste(.data[[id_var]], leader, sep=" | "))
+    ) %>% ungroup() %>%
+    group_by(leader_term_id) %>%
+    arrange(.data[[time_var]], .by_group = TRUE) %>%
+    mutate(tenure_year = ifelse(all(is.na(leader_term_id)), NA_integer_,
+                                .data[[time_var]] - min(.data[[time_var]], na.rm=TRUE) + 1L)) %>%
+    ungroup()
+} else {
+  message("No 'leader' in data; leader-term analysis will be skipped.")
+}
+
+# Save transformed panel snapshot (appendix)
+write.csv(d, "results/appendix/csv/panel_transformed.csv", row.names = FALSE)
+
+# ========================= 3) SAMPLES =========================
+d_base <- subset(d, baseline_1990plus == TRUE)
+d_cw   <- if ("conflict_available" %in% names(d)) subset(d, conflict_available == TRUE & baseline_1990plus == TRUE) else NULL
+
+dv_main <- if ("v2exl_legitideol_z" %in% names(d)) "v2exl_legitideol_z" else dv
+vc_id   <- as.formula(paste0("~", id_var))
+
+theory_blk <- intersect(c(
+  "house_comp_last","house_years_since","house_nonelec",
+  "v2cagenmob_l1","v2psprlnks_logit","v2cacamps_logit","v2smpolsoc_l1","v2psprbrch_logit"
+), names(d_base))
+
+covar_blk <- intersect(c(
+  theory_blk,
+  "v2mecenefm_l1",
+  "gdp_log","gdp_pc_log","gdp_per_capita_log","wb_gdppc_log",
+  "gini_01","v2x_cspart_l1","v2csstruc_l1"
+), names(d_base))
+
+execorr_base <- if ("v2x_execorr" %in% names(d)) "v2x_execorr" else if ("v2excrptps" %in% names(d)) "v2excrptps" else stop("No exec corruption base var.")
+if (!paste0(execorr_base,"_l1") %in% names(d) || !paste0(execorr_base,"_l2") %in% names(d)) {
+  d <- d %>% group_by(.data[[id_var]]) %>%
+    arrange(.data[[time_var]], .by_group = TRUE) %>%
+    mutate(
+      !!paste0(execorr_base,"_l1") := dplyr::lag(.data[[execorr_base]], 1),
+      !!paste0(execorr_base,"_l2") := dplyr::lag(.data[[execorr_base]], 2)
+    ) %>% ungroup()
+  d_base <- subset(d, baseline_1990plus == TRUE)
+}
+lag1 <- paste0(execorr_base, "_l1")
+lag2 <- paste0(execorr_base, "_l2")
+
+# Also create a 1-year lead for placebo (used later)
+if (!paste0(execorr_base,"_f1") %in% names(d)) {
+  d <- d %>% group_by(.data[[id_var]]) %>%
+    mutate(!!paste0(execorr_base,"_f1") := dplyr::lead(.data[[execorr_base]], 1)) %>% ungroup()
+}
+d_base <- subset(d, baseline_1990plus == TRUE)
+lead1 <- paste0(execorr_base, "_f1")
+
+# ========================= MAIN ANALYSIS =========================
+# (Everything in this block is intended for the main text)
+
+# -------- 4) MAIN TABLE — COUNTRY×YEAR FE (console only) --------
+dat_dem <- d_base %>% dplyr::filter(v2x_polyarchy >= 0.60)
+fe_rhs  <- paste(id_var, "+", time_var)
+
+# ---- Diagnose missingness & build parsimonious RHS sets ----
+vars_core <- c(dv_main, lag1, lag2, id_var, time_var)
+
+# candidate RHS = theory + covars that actually exist in the democratic sample
+cand_rhs <- intersect(unique(c(theory_blk, covar_blk)), names(dat_dem))
+
+# coverage per variable in democratic sample
+cov_df <- tibble::tibble(
+  var   = cand_rhs,
+  cover = sapply(cand_rhs, function(v) mean(!is.na(dat_dem[[v]])))
+) %>% dplyr::arrange(cover)
+
+cat("\n=== Worst-coverage covariates (bottom 10) ===\n")
+print(utils::head(cov_df, 10))
+
+# Build RHS sets by coverage thresholds (tunable)
+rhs_dense  <- cov_df %>% dplyr::filter(cover >= .85) %>% dplyr::pull(var)   # high-coverage
+rhs_mid    <- cov_df %>% dplyr::filter(cover >= .70) %>% dplyr::pull(var)   # moderate-coverage
+rhs_theory <- intersect(theory_blk, names(dat_dem))                          # your theory block
+
+# Compose main & covariate blocks with priority to coverage
+rhs_main   <- intersect(rhs_theory, rhs_dense)                 # theory vars but only dense ones
+if (length(rhs_main) < 3L) rhs_main <- intersect(rhs_theory, rhs_mid)  # relax if too short
+
+rhs_covars <- intersect(unique(c(rhs_main, rhs_dense)), names(dat_dem))
+if (length(rhs_covars) < length(rhs_main) + 2L) {
+  # ensure covars set is strictly richer than main; top-up from rhs_mid
+  rhs_covars <- unique(c(rhs_main, setdiff(rhs_mid, rhs_main)))
+}
+
+# Helper to show effective sample size before fitting
+eff_N <- function(cterm, rhs_vec) {
+  need <- unique(c(vars_core, cterm, rhs_vec))
+  sum(stats::complete.cases(dat_dem[, need, drop = FALSE]))
+}
+cat("\nEffective N (complete cases) by spec:\n")
+cat("  lag1 only:            ", eff_N(lag1, character(0)), "\n")
+cat("  lag1 + MAIN:          ", eff_N(lag1, rhs_main), "\n")
+cat("  lag1 + COVARS:        ", eff_N(lag1, rhs_covars), "\n")
+cat("  lag2 only:            ", eff_N(lag2, character(0)), "\n")
+cat("  lag2 + MAIN:          ", eff_N(lag2, rhs_main), "\n")
+cat("  lag2 + COVARS:        ", eff_N(lag2, rhs_covars), "\n")
+
+# ---- Fit models on coverage-screened RHS ----
+fit_spec <- function(cterm, rhs_vec, data_use = dat_dem){
+  rhs_use <- intersect(c(cterm, rhs_vec), names(data_use))
+  fixest::feols(
+    as.formula(paste(dv_main, "~", paste(rhs_use, collapse=" + "), "|", fe_rhs)),
+    data = data_use, vcov = vc_id
+  )
+}
+
+mA1 <- fit_spec(lag1, character(0))
+mB1 <- fit_spec(lag1, rhs_main)
+mC1 <- fit_spec(lag1, rhs_covars)  # preferred baseline col
+mA2 <- fit_spec(lag2, character(0))
+mB2 <- fit_spec(lag2, rhs_main)
+mC2 <- fit_spec(lag2, rhs_covars)
+
+mods_main <- list(
+  "t−1 Exec (no regime ctrl)" = mA1,
+  "t−1 +Main (no regime ctrl)" = mB1,
+  "t−1 +Covars (preferred)"    = mC1,
+  "t−2 Exec (no regime ctrl)"  = mA2,
+  "t−2 +Main (no regime ctrl)" = mB2,
+  "t−2 +Covars"                = mC2
+)
+
+present <- unique(unlist(lapply(mods_main, function(m) names(stats::coef(m)))))
+lbl <- c(
+  setNames("Executive corruption (t−1)", lag1),
+  setNames("Executive corruption (t−2)", lag2),
+  "v2cacamps_logit" = "Political polarization (logit)",
+  "v2smpolsoc_l1"   = "Social polarization (t−1)",
+  "v2cagenmob_l1"   = "Mass mobilization (t−1)",
+  "v2psprlnks_logit"= "Programmatic linkage (logit)",
+  "v2psprbrch_logit"= "Party branches (logit)",
+  "house_comp_last" = "House competitiveness (last)",
+  "house_years_since" = "Years since house election",
+  "house_nonelec"     = "Non-election year (house)",
+  "v2mecenefm_l1"     = "Gov’t censorship effort (t−1)",
+  "gdp_log"           = "GDP per capita (log)",
+  "gdp_pc_log"        = "GDP per capita (log)",
+  "gdp_per_capita_log"= "GDP per capita (log)",
+  "wb_gdppc_log"      = "GDP per capita (log)",
+  "gini_01"           = "Gini (0–1)",
+  "v2x_cspart_l1"     = "Civil society (t−1)",
+  "v2csstruc_l1"      = "Civil society (t−1)"
+)
+coef_map <- lbl[names(lbl) %in% present]
+
+options(modelsummary_factory_default = "kableExtra")
+options(modelsummary_format_numeric_latex = "plain")
+
+# 👉 Console-only table (no file output)
+ms_main <- modelsummary::modelsummary(
+  mods_main,
+  coef_map   = coef_map,
+  estimate   = "{estimate}{stars}",
+  statistic  = "({std.error})",
+  stars      = c("*" = .10, "**" = .05, "***" = .01),
+  gof_omit   = "IC|Log|Adj|AIC|BIC",
+  notes      = c(
+    "Sample: v2x_polyarchy ≥ 0.60 (democracies). Country & year FE; SE clustered by country.",
+    "Significance: * p<0.10, ** p<0.05, *** p<0.01."
+  )
+)
+print(ms_main)
+
+
+# ====================== 4A) LEADER FE — console-only, stepwise & diagnostics ======================
+
+if (!("leader_id" %in% names(d))) stop("No 'leader' column in the data. Make sure header normalization ran.")
+dat_dem_leader <- d_base %>% dplyr::filter(v2x_polyarchy >= 0.60, !is.na(leader_id))
+
+if (nrow(dat_dem_leader) == 0) stop("No democratic observations (>= .60) with non-missing leader_id.")
+
+fe_rhs_leader <- paste("leader_id", "+", time_var)
+vc_leader     <- ~ leader_id
+
+# Candidate pools already defined earlier; now intersect with leader sample
+leader_pool <- intersect(c(
+  "house_comp_last","house_years_since","house_nonelec",     # election timing
+  "v2cagenmob_l1","v2psprlnks_logit","v2cacamps_logit","v2smpolsoc_l1","v2psprbrch_logit",  # politics
+  "v2mecenefm_l1",                                           # censorship
+  "gdp_log","gdp_pc_log","gdp_per_capita_log","wb_gdppc_log",
+  "gini_01","v2x_cspart_l1","v2csstruc_l1"
+), names(dat_dem_leader))
+
+# 1) Coverage-driven trimming (keep N up)
+covL <- tibble::tibble(
+  var   = leader_pool,
+  cover = sapply(leader_pool, function(v) mean(!is.na(dat_dem_leader[[v]])))
+) %>% dplyr::arrange(dplyr::desc(cover))
+
+# Dense set (>= .85 coverage); fallback to >= .70 if too small
+rhs_dense_L <- covL %>% dplyr::filter(cover >= .85) %>% dplyr::pull(var)
+if (length(rhs_dense_L) < 3L) rhs_dense_L <- covL %>% dplyr::filter(cover >= .70) %>% dplyr::pull(var)
+
+# 2) Define “likely mediators” that we should not put in the main leader-FE spec
+likely_mediators <- intersect(c(
+  "v2cacamps_logit",     # polarization (elite)
+  "v2smpolsoc_l1",       # polarization (society)
+  "v2mecenefm_l1",       # censorship effort
+  "v2psprlnks_logit",    # programmatic linkage
+  "v2psprbrch_logit",    # party branch presence
+  "v2cagenmob_l1"        # mass mobilization
+), names(dat_dem_leader))
+
+# 3) Build RHS blocks
+rhs_minimal   <- character(0)                            # just the treatment (lag1) + FE
+rhs_main_L    <- setdiff(intersect(rhs_dense_L, leader_pool), likely_mediators)  # high-coverage, non-mediator controls
+# add a couple of basic plausibly exogenous time-varying confounders if present
+rhs_main_L    <- intersect(c(rhs_main_L, "house_comp_last","house_years_since","house_nonelec",
+                             "gdp_log","gdp_pc_log","gdp_per_capita_log","wb_gdppc_log",
+                             "gini_01","v2x_cspart_l1","v2csstruc_l1"), names(dat_dem_leader))
+
+rhs_full_L    <- intersect(unique(c(rhs_main_L, likely_mediators)), names(dat_dem_leader))
+
+# 4) Helper to fit & to compute effective N (complete cases for the used columns)
+fit_leader <- function(cterm, rhs_vec){
+  rhs_use <- intersect(c(cterm, rhs_vec), names(dat_dem_leader))
+  fixest::feols(
+    as.formula(paste(dv_main, "~", paste(rhs_use, collapse=" + "), "|", fe_rhs_leader)),
+    data = dat_dem_leader, vcov = vc_leader
+  )
+}
+effN <- function(cterm, rhs_vec){
+  need <- unique(c(dv_main, cterm, rhs_vec, id_var, time_var, "leader_id"))
+  sum(stats::complete.cases(dat_dem_leader[, need, drop = FALSE]))
+}
+
+cat("\n=== Leader FE: effective N (complete cases) ===\n")
+cat("  (1) Minimal (lag1 only):      ", effN(lag1, rhs_minimal), "\n")
+cat("  (2) +Main (no likely mediators): ", effN(lag1, rhs_main_L), "\n")
+cat("  (3) +Full (adds likely mediators):", effN(lag1, rhs_full_L), "\n")
+
+mL1 <- fit_leader(lag1, rhs_minimal)
+mL2 <- fit_leader(lag1, rhs_main_L)
+mL3 <- fit_leader(lag1, rhs_full_L)
+
+# 5) Console-only table (no files)
+present_any  <- unique(unlist(lapply(list(mL1,mL2,mL3), function(m) names(stats::coef(m)))))
+coef_map_L   <- coef_map[names(coef_map) %in% present_any]
+
+options(modelsummary_factory_default = "kableExtra")
+options(modelsummary_format_numeric_latex = "plain")
+
+tabL <- modelsummary::modelsummary(
+  list(
+    "(1) Minimal (lag1 only)"              = mL1,
+    "(2) +Main (no likely mediators)"      = mL2,
+    "(3) +Full (adds likely mediators)"    = mL3
+  ),
+  coef_map  = coef_map_L,
+  estimate  = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars     = c("*"=.10,"**"=.05,"***"=.01),
+  gof_omit  = "IC|Log|Adj|AIC|BIC",
+  notes     = c(
+    "Leader and Year FE; SE clustered by leader.",
+    "Spec (2) avoids variables likely on the causal path (polarization, censorship, linkage, mobilization)."
+  ),
+  output = "markdown"
+)
+
+print(tabL)
+
+# 6) Quick diagnostics: within-leader variation in executive corruption
+cat("\n=== Within-leader SD of executive corruption (lag1) ===\n")
+tmp <- dat_dem_leader %>%
+  dplyr::group_by(leader_id) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    sd_within = stats::sd(.data[[lag1]], na.rm = TRUE)
+  ) %>% dplyr::ungroup()
+
+summary_sd <- summary(tmp$sd_within)
+print(summary_sd)
+cat("Leaders with near-zero within variation (sd<0.02): ",
+    sum(!is.na(tmp$sd_within) & tmp$sd_within < 0.02), "of", nrow(tmp), "\n")
+
+# 7) Compare clustering and FE on the exact same rows (sanity check)
+#    (i) cluster by country instead of leader
+cat("\n=== Same (2) spec but clustered by country ===\n")
+mL2_countryClus <- fixest::feols(
+  as.formula(paste(dv_main, "~", paste(c(lag1, rhs_main_L), collapse=" + "), "|", fe_rhs_leader)),
+  data = dat_dem_leader,
+  vcov = as.formula(paste0("~", id_var))
+)
+print(fixest::etable(mL2_countryClus, se.below=TRUE, digits=3))
+
+#    (ii) Country FE on the same rows used by mL2 (to see if FE choice is driving things)
+keys <- dat_dem_leader %>% dplyr::distinct(.data[[id_var]], .data[[time_var]])
+dat_same <- d %>% dplyr::filter(baseline_1990plus == TRUE, v2x_polyarchy >= .60) %>%
+  dplyr::inner_join(keys, by = setNames(c(id_var, time_var), c(id_var, time_var)))
+
+m_country_same <- fixest::feols(
+  as.formula(paste(dv_main, "~", paste(c(lag1, rhs_main_L), collapse=" + "),
+                   "|", paste(id_var, "+", time_var))),
+  data = dat_same,
+  vcov = as.formula(paste0("~", id_var))
+)
+
+cat("\n=== Country FE on the same rows as (2) ===\n")
+print(fixest::etable(m_country_same, se.below=TRUE, digits=3))
+
+# -------- 4B) PERIOD HETEROGENEITY — console-only, coverage-aware --------
+dat_dem_period <- d_base %>%
+  dplyr::filter(v2x_polyarchy >= 0.60)
+
+if (nrow(dat_dem_period) == 0L) {
+  message("No democratic rows (>= .60); skipping period heterogeneity.")
+} else {
+  # 1) Build eras from the year column
+  yr <- as.numeric(dat_dem_period[[time_var]])
+  dat_dem_period$period_era <- cut(
+    yr,
+    breaks = c(1980, 1990, 2000, 2010, 2017, 2025),  # right-open bins
+    right  = FALSE,
+    labels = c("1980s", "1990s", "2000s", "2010–2016", "2017–2024")
+  )
+  dat_dem_period <- dat_dem_period %>% dplyr::filter(!is.na(period_era))
+  
+  if (nrow(dat_dem_period) == 0L) {
+    message("After binning years into eras, no rows remain; skipping.")
+  } else {
+    # 2) Choose reference period (prefer 2000s, else most frequent)
+    has_2000s <- any(as.character(dat_dem_period$period_era) == "2000s")
+    ref_per <- if (has_2000s) {
+      "2000s"
+    } else {
+      dat_dem_period %>%
+        dplyr::count(period_era, sort = TRUE) %>%
+        dplyr::slice(1) %>% dplyr::pull(period_era) %>% as.character()
+    }
+    
+    # 3) Candidate controls from your theory/covariate blocks (intersect with available cols)
+    cand_ctrls <- intersect(unique(c(theory_blk, covar_blk)), names(dat_dem_period))
+    
+    # 4) Diagnose coverage and keep only dense controls (>= .85); relax to .70 if needed
+    cov_tbl <- tibble::tibble(
+      var   = cand_ctrls,
+      cover = sapply(cand_ctrls, function(v) mean(!is.na(dat_dem_period[[v]])))
+    ) %>% dplyr::arrange(dplyr::desc(cover))
+    
+    rhs_dense <- cov_tbl %>% dplyr::filter(cover >= .85) %>% dplyr::pull(var)
+    if (length(rhs_dense) < 3L) rhs_dense <- cov_tbl %>% dplyr::filter(cover >= .70) %>% dplyr::pull(var)
+    
+    # 5) Build interaction and formulas
+    slope_period <- paste0("i(period_era, var=", lag1, ", ref='", ref_per, "')")
+    fe_rhs_period <- paste(id_var, "+", time_var)
+    
+    # Helper to compute effective N for a given RHS set
+    effN_period <- function(rhs_vec) {
+      need <- unique(c(dv_main, lag1, "period_era", rhs_vec, id_var, time_var))
+      sum(stats::complete.cases(dat_dem_period[, need, drop = FALSE]))
+    }
+    
+    # 6) Try dense-controls model first
+    rhs_use <- intersect(rhs_dense, names(dat_dem_period))
+    N_dense <- effN_period(rhs_use)
+    
+    cat("\n=== Period interaction: effective N (dense controls) ===\n")
+    cat("  Controls kept:", ifelse(length(rhs_use)==0, "(none)", paste(rhs_use, collapse=", ")), "\n")
+    cat("  Complete-case N:", N_dense, "of", nrow(dat_dem_period), "rows\n")
+    
+    f_period_dense <- as.formula(paste(
+      dv_main, "~", paste(c(slope_period, rhs_use), collapse = " + "), "|", fe_rhs_period
+    ))
+    
+    # 7) If dense spec is too lossy, fall back to interaction-only (no extra controls)
+    #    You can tweak the threshold (e.g., require at least 1,500 rows)
+    N_thresh <- 1500
+    if (N_dense < N_thresh) {
+      cat("\n[Info] Dense spec leaves too few rows (", N_dense, " < ", N_thresh,
+          "). Fitting lean interaction-only model for transparency.\n", sep = "")
+      f_period_lean <- as.formula(paste(
+        dv_main, "~", slope_period, "|", fe_rhs_period
+      ))
+      m_period <- fixest::feols(f_period_lean, data = dat_dem_period,
+                                vcov = as.formula(paste0("~", id_var)))
+      spec_label <- paste0("Period slopes (ref=", ref_per, "), lean (interaction only)")
+    } else {
+      m_period <- fixest::feols(f_period_dense, data = dat_dem_period,
+                                vcov = as.formula(paste0("~", id_var)))
+      spec_label <- paste0("Period slopes (ref=", ref_per, "), with dense covariates")
+    }
+    
+    # 8) Console-only table
+    options(modelsummary_factory_default = "kableExtra")
+    options(modelsummary_format_numeric_latex = "plain")
+    
+    tab_per <- modelsummary::modelsummary(
+      setNames(list(m_period), spec_label),
+      estimate  = "{estimate}{stars}",
+      statistic = "({std.error})",
+      stars     = c("*" = .10, "**" = .05, "***" = .01),
+      gof_omit  = "IC|Log|Adj|AIC|BIC",
+      notes     = c(
+        paste0("Reference period: ", ref_per, ". Coefficients are the slope of executive corruption (t−1) within each era."),
+        "Two-way FE (country and year). SE clustered by country. Democratic sample (v2x_polyarchy ≥ .60)."
+      ),
+      output    = "markdown"
+    )
+    print(tab_per)
+    
+    # 9) Optional: also print a small coverage table to console (bottom 8 by coverage)
+    cat("\n=== Lowest-coverage candidate controls (bottom 8) ===\n")
+    print(utils::tail(cov_tbl, 8))
+  }
+}
+
+
+# ========================= 5) INTERACTION: POLYARCHY — STREAMLINED =========================
+# Goal: one clean figure + console summary, no table files.
+# - Spec: dv ~ lag1 + polyarchy + controls + lag1:polyarchy | country + year
+# - Cluster: country
+# - Output: results/main/figs/me_polyarchy_streamlined.png
+
+# ---- safety checks ----
+stopifnot(exists("d_base"), exists("id_var"), exists("time_var"))
+if (!all(c(lag1, "v2x_polyarchy") %in% names(d_base))) {
+  message("Skipping polyarchy interaction: missing variables.")
+} else {
+  
+  dat_poly <- d_base %>%
+    dplyr::filter(!is.na(.data[["v2x_polyarchy"]]))
+  
+  # reuse your blocks; keep only available controls
+  rhs_covars_poly <- intersect(c(theory_blk, covar_blk), names(dat_poly))
+  fe_rhs_poly     <- paste(id_var, "+", time_var)
+  
+  # ---- fit interaction model (console only) ----
+  f_poly <- as.formula(paste(
+    dv_main, "~", paste(c(lag1, "v2x_polyarchy", rhs_covars_poly), collapse = " + "),
+    "+", paste0(lag1, ":v2x_polyarchy"),
+    "|", fe_rhs_poly
+  ))
+  m_poly <- fixest::feols(f_poly, data = dat_poly, vcov = as.formula(paste0("~", id_var)))
+  
+  # quick console print
+  cat("\n=== Polyarchy interaction (country & year FE; clustered by country) ===\n")
+  print(fixest::etable(m_poly, se.below = TRUE, digits = 3))
+  
+  # ---- marginal effects curve (continuous 0..1) ----
+  grab_name <- function(nms, a, b = NULL){
+    if (is.null(b)) { if (a %in% nms) return(a); stop("Term not found: ", a) }
+    nm1 <- paste0(a, ":", b); nm2 <- paste0(b, ":", a)
+    if (nm1 %in% nms) return(nm1)
+    if (nm2 %in% nms) return(nm2)
+    stop("Interaction not found: ", a,":",b)
+  }
+  me_curve_df <- function(model, var_main, moderator, grid=seq(0,1,.01)){
+    co <- stats::coef(model); V <- stats::vcov(model); nms <- names(co)
+    b1n <- grab_name(nms, var_main)                  # main effect of var_main
+    b3n <- grab_name(nms, var_main, moderator)       # interaction term
+    b1  <- co[b1n]; b3 <- co[b3n]
+    slope <- as.numeric(b1 + b3*grid)
+    se    <- sqrt(V[b1n,b1n] + (grid^2)*V[b3n,b3n] + 2*grid*V[b1n,b3n])
+    data.frame(x=grid, slope=slope, lo=slope-1.96*se, hi=slope+1.96*se)
+  }
+  df_me <- me_curve_df(m_poly, var_main = lag1, moderator = "v2x_polyarchy", grid = seq(0, 1, .01))
+  
+  # ---- discrete "low/med/high democracy" markers (terciles) ----
+  qs <- stats::quantile(dat_poly$v2x_polyarchy, probs = c(.333, .666), na.rm = TRUE)
+  # representative value = bin mean (more stable than cut midpoints)
+  dat_poly <- dat_poly %>%
+    dplyr::mutate(poly_bin = cut(v2x_polyarchy, breaks = c(-Inf, qs[1], qs[2], Inf),
+                                 labels = c("Low polyarchy", "Medium polyarchy", "High polyarchy")))
+  rep_vals <- dat_poly %>%
+    dplyr::group_by(poly_bin) %>%
+    dplyr::summarise(x = mean(v2x_polyarchy, na.rm=TRUE), .groups="drop") %>%
+    dplyr::filter(!is.na(poly_bin))
+  
+  # delta-method for slope at each representative x
+  slope_at <- function(x) {
+    co <- stats::coef(m_poly); V <- stats::vcov(m_poly); nms <- names(co)
+    b1n <- grab_name(nms, lag1); b3n <- grab_name(nms, lag1, "v2x_polyarchy")
+    b1  <- co[b1n]; b3 <- co[b3n]
+    s   <- as.numeric(b1 + b3*x)
+    se  <- sqrt(V[b1n,b1n] + (x^2)*V[b3n,b3n] + 2*x*V[b1n,b3n])
+    data.frame(x = x, slope = s, lo = s - 1.96*se, hi = s + 1.96*se)
+  }
+  pts <- dplyr::bind_rows(lapply(rep_vals$x, slope_at))
+  pts$poly_bin <- rep_vals$poly_bin
+  
+  # ---- plot & save ----
+  p <- ggplot2::ggplot(df_me, ggplot2::aes(x = x, y = slope)) +
+    ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), alpha = .15) +
+    ggplot2::geom_line(linewidth = .9) +
+    ggplot2::geom_hline(yintercept = 0, linetype = 3) +
+    ggplot2::geom_point(data = pts, ggplot2::aes(x = x, y = slope)) +
+    ggplot2::geom_text(data = pts,
+                       ggplot2::aes(x = x, y = slope, label = poly_bin),
+                       nudge_y = 0.02, vjust = -0.2, size = 3.5) +
+    ggplot2::labs(
+      x = "Polyarchy (0–1)",
+      y = "Marginal effect of corruption (t−1) on ideology",
+      title = "Effect of executive corruption across regime type",
+      subtitle = "Country & year FE; SE clustered by country; ribbon = 95% CI"
+    ) +
+    ggplot2::theme_minimal(base_size = 12)
+  
+  dir.create("results/main/figs", showWarnings = FALSE, recursive = TRUE)
+  ggplot2::ggsave("results/main/figs/me_polyarchy_streamlined.png", p, width = 7, height = 5, dpi = 300)
+  
+  # ---- console summary of discrete points ----
+  cat("\n--- Marginal effects at representative polyarchy levels (mean within tercile) ---\n")
+  print(pts)
+}
+
+
+## ==== Publication-style marginal effects plot (polyarchy terciles) ====
+## assumes: m_poly (fixest feols with v2x_execorr_l1 * v2x_polyarchy)
+##          d_base (data frame with v2x_polyarchy)
+## outputs: results/main/figs/mfx_polyarchy_terciles.{png,pdf}
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(dplyr)
+})
+
+dir.create("results/main/figs", recursive = TRUE, showWarnings = FALSE)
+
+# --- helpers to safely grab coefficient names (order-agnostic for the interaction) ---
+grab_name <- function(nms, a, b = NULL){
+  if (is.null(b)) {
+    if (a %in% nms) return(a)
+    stop("Term not found in model: ", a)
+  }
+  nm1 <- paste0(a, ":", b)
+  nm2 <- paste0(b, ":", a)
+  if (nm1 %in% nms) return(nm1)
+  if (nm2 %in% nms) return(nm2)
+  stop("Interaction not found in model: ", a, " × ", b)
+}
+
+# Identify the main and interaction terms
+co  <- stats::coef(m_poly)
+V   <- stats::vcov(m_poly)
+nms <- names(co)
+main_var <- "v2x_execorr_l1"
+mod_var  <- "v2x_polyarchy"
+b1n <- grab_name(nms, main_var)
+b3n <- grab_name(nms, main_var, mod_var)
+b1  <- unname(co[b1n])
+b3  <- unname(co[b3n])
+
+# Marginal effect and 95% CI of corruption at polyarchy value x
+me_at <- function(x){
+  slope <- b1 + b3 * x
+  se    <- sqrt(V[b1n, b1n] + (x^2) * V[b3n, b3n] + 2 * x * V[b1n, b3n])
+  data.frame(x = x,
+             estimate = slope,
+             conf.low = slope - 1.96 * se,
+             conf.high= slope + 1.96 * se)
+}
+
+# --- Tercile means of polyarchy in the democratic sample (representative points) ---
+dem_poly <- d_base %>%
+  dplyr::filter(!is.na(.data[[mod_var]])) %>%
+  dplyr::pull(!!mod_var)
+
+qs   <- stats::quantile(dem_poly, c(0, 1/3, 2/3, 1), na.rm = TRUE)
+bins <- cut(dem_poly, qs, include.lowest = TRUE,
+            labels = c("Low polyarchy", "Medium polyarchy", "High polyarchy"))
+
+rep_vals <- data.frame(poly_bin = levels(bins)) %>%
+  rowwise() %>%
+  mutate(v2x_polyarchy = mean(dem_poly[bins == poly_bin], na.rm = TRUE)) %>%
+  ungroup()
+
+mfx_pts <- do.call(rbind, lapply(rep_vals$v2x_polyarchy, me_at))
+mfx_pts$poly_bin <- factor(rep_vals$poly_bin,
+                           levels = c("Low polyarchy","Medium polyarchy","High polyarchy"))
+
+# --- Plot (grayscale-friendly, journal style) ---
+p <- ggplot(mfx_pts, aes(x = poly_bin, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.4) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.18, linewidth = 0.6) +
+  geom_point(shape = 16, size = 3) +
+  labs(
+    x = "Regime quality (Polyarchy terciles)",
+    y = "Marginal effect of Executive Corruption (t−1)",
+    caption = "Marginal effects at tercile means of polyarchy; 95% CIs from a country–year FE model with clustered SEs.\nDemocratic sample (v2x_polyarchy ≥ 0.60)."
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    axis.title.x = element_text(margin = margin(t = 8)),
+    axis.title.y = element_text(margin = margin(r = 8)),
+    plot.caption = element_text(hjust = 0, size = 9, margin = margin(t = 6)),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 10)
+  )
+
+# Show
+print(p)
+
+
+# Save standard PDF (no Cairo, no warnings)
+ggsave("results/main/figs/mfx_polyarchy_terciles.pdf", p,
+       width = 6.0, height = 4.2, device = grDevices::pdf)
+
+
+# ========================= ROBUSTNESS & APPENDIX =========================
+# (Everything below should live in the online appendix)
+
+# ---- A) Democracy thresholds (.55/.60/.70) ----
+thr_vec <- c(.55, .60, .70)
+mk_specs <- function(corr_term){
+  list(
+    "Exec+Regime" = function(dat){
+      rhs <- intersect(c(corr_term, "v2x_polyarchy"), names(dat))
+      fixest::feols(as.formula(paste(dv_main, "~", paste(rhs, collapse=" + "),
+                                     "|", paste(id_var, "+", time_var))), data = dat, vcov = vc_id)
+    },
+    "+Main" = function(dat){
+      rhs <- intersect(c(corr_term, "v2x_polyarchy", theory_blk), names(dat))
+      fixest::feols(as.formula(paste(dv_main, "~", paste(rhs, collapse=" + "),
+                                     "|", paste(id_var, "+", time_var))), data = dat, vcov = vc_id)
+    },
+    "+Covars" = function(dat){
+      rhs <- intersect(c(corr_term, "v2x_polyarchy", theory_blk, covar_blk), names(dat))
+      fixest::feols(as.formula(paste(dv_main, "~", paste(rhs, collapse=" + "),
+                                     "|", paste(id_var, "+", time_var))), data = dat, vcov = vc_id)
+    }
+  )
+}
+pull_corr <- function(m, term){
+  ct <- tryCatch(summary(m)$coeftable, error = function(e) NULL)
+  if (is.null(ct) || !term %in% rownames(ct)) return(tibble::tibble(beta=NA,se=NA,p=NA,n=nobs(m)))
+  tibble::tibble(beta=ct[term,"Estimate"], se=ct[term,"Std. Error"], p=ct[term,"Pr(>|t|)"], n=nobs(m))
+}
+corr_terms <- c(lag1, lag2)
+
+demo_results <- purrr::map_dfr(thr_vec, function(thr){
+  dat <- d_base %>% dplyr::filter(v2x_polyarchy >= thr)
+  purrr::map_dfr(corr_terms, function(cterm){
+    specs <- mk_specs(cterm)
+    purrr::imap_dfr(specs, function(fitfun, spec_name){
+      m <- fitfun(dat)
+      pull_corr(m, cterm) %>%
+        dplyr::mutate(threshold = thr, spec = spec_name, corr_term = cterm)
+    })
+  })
+}) %>%
+  dplyr::select(threshold, corr_term, spec, beta, se, p, n) %>%
+  dplyr::arrange(corr_term, threshold, spec)
+readr::write_csv(demo_results, "results/appendix/csv/robust_thresholds.csv")
+
+# ---- B) Alternative competitiveness: presidential ----
+m_pres <- NULL
+if (all(c("pres_comp_last","pres_years_since","pres_nonelec") %in% names(d_base))) {
+  theory_pres <- setNames(theory_blk, theory_blk)
+  theory_pres <- sub("house_comp_last","pres_comp_last", theory_pres, fixed=TRUE)
+  theory_pres <- sub("house_years_since","pres_years_since", theory_pres, fixed=TRUE)
+  theory_pres <- sub("house_nonelec","pres_nonelec", theory_pres, fixed=TRUE)
+  rhs <- intersect(c(lag1, theory_pres, covar_blk), names(d_base))
+  m_pres <- fixest::feols(as.formula(paste(dv_main, "~", paste(rhs, collapse=" + "),
+                                           "|", paste(id_var, "+", time_var))),
+                          data = d_base, vcov = vc_id)
+  capture.output(fixest::etable(m_pres, se.below=TRUE, digits=3),
+                 file = "results/appendix/tables/robust_pres_comp.txt")
+}
+
+# ---- C) Conflict window (if available) ----
+m_cw <- NULL
+if (!is.null(d_cw) && "e_civil_war_l1" %in% names(d_cw)) {
+  rhsF <- intersect(c(lag1, theory_blk, covar_blk, "e_civil_war_l1"), names(d_cw))
+  m_cw <- fixest::feols(as.formula(paste(dv_main, "~", paste(rhsF, collapse=" + "),
+                                         "|", paste(id_var, "+", time_var))), data = d_cw, vcov = vc_id)
+  capture.output(fixest::etable(m_cw, se.below=TRUE, digits=3),
+                 file = "results/appendix/tables/robust_conflict_window.txt")
+}
+
+# ---- D) Within-standardized FE betas + LMG (Shapley) ----
+dem_dat <- d_base %>% filter(v2x_polyarchy >= .60)
+rhs_full <- intersect(c(
+  lag1, "v2cacamps_logit","v2mecenefm_l1","v2psprlnks_logit","v2psprbrch_logit",
+  "house_comp_last","house_years_since","house_nonelec",
+  "gdp_log","gdp_pc_log","gdp_per_capita_log","wb_gdppc_log",
+  "gini_01","v2x_cspart_l1","v2csstruc_l1"
+), names(dem_dat))
+demean_g <- function(x, id) x - ave(x, id, FUN=function(z) mean(z, na.rm=TRUE))
+wsd_g    <- function(x, id) ave(x, id, FUN=function(z) sd(z, na.rm=TRUE))
+wstd_g   <- function(x, id){ dm <- demean_g(x, id); sdw <- wsd_g(x, id); sdw[is.na(sdw)|sdw==0] <- NA_real_; dm/sdw }
+
+dv_wstd <- paste0(dv_main, "_wstd")
+dem_dat[[dv_wstd]] <- wstd_g(dem_dat[[dv_main]], dem_dat[[id_var]])
+rhs_wstd <- paste0(rhs_full, "_wstd")
+for (i in seq_along(rhs_full)) dem_dat[[rhs_wstd[i]]] <- wstd_g(dem_dat[[rhs_full[i]]], dem_dat[[id_var]])
+
+f_std <- as.formula(paste(dv_wstd, "~", paste(rhs_wstd, collapse=" + "), "|", paste(id_var, "+", time_var)))
+m_beta <- fixest::feols(f_std, data = dem_dat, vcov = vc_id)
+
+present_b <- names(stats::coef(m_beta))
+lbl_b <- c(
+  setNames("Executive corruption (t−1, β)", paste0(lag1,"_wstd")),
+  setNames("Political polarization (β)",    "v2cacamps_logit_wstd"),
+  setNames("Gov’t censorship (t−1, β)",     "v2mecenefm_l1_wstd"),
+  setNames("Programmatic linkage (β)",      "v2psprlnks_logit_wstd"),
+  setNames("Party branches (β)",            "v2psprbrch_logit_wstd"),
+  setNames("House competitiveness (β)",     "house_comp_last_wstd")
+)
+coef_map_b <- lbl_b[names(lbl_b) %in% present_b]
+
+modelsummary::modelsummary(
+  list("Democracies: within-standardized FE" = m_beta),
+  output   = "results/appendix/tables/robust_within_beta.docx",
+  coef_map = coef_map_b, gof_omit  = "IC|Log|Adj|AIC|BIC",
+  statistic = "({p.value})",
+  notes     = "DV & RHS standardized within-country; country & year FE; SE clustered by country."
+)
+
+wc_sd <- function(x, id) tapply(x, id, sd, na.rm=TRUE)
+nonmiss_rate <- sapply(rhs_full, function(v) mean(!is.na(dem_dat[[v]])))
+med_wsd      <- sapply(rhs_full, function(v) median(wc_sd(dem_dat[[v]], dem_dat[[id_var]]), na.rm=TRUE))
+rhs_keep     <- names(which(nonmiss_rate >= .80 & med_wsd >= .02))
+vars_needed  <- c(dv_main, rhs_keep, id_var, time_var)
+dem_cc <- dem_dat %>% dplyr::select(dplyr::all_of(vars_needed)) %>% tidyr::drop_na()
+
+resid_tw <- function(var, dat){
+  f <- as.formula(paste(var, "~ 1 |", id_var, "+", time_var))
+  as.numeric(residuals(fixest::feols(f, data=dat)))
+}
+df_w <- data.frame(y = resid_tw(dv_main, dem_cc))
+for (v in rhs_keep) df_w[[v]] <- resid_tw(v, dem_cc)
+
+lm_w <- lm(y ~ ., data = df_w)
+rel  <- relaimpo::calc.relimp(lm_w, type="lmg", rela=TRUE)
+lmg_tbl <- sort(rel$lmg, decreasing=TRUE)
+write.csv(round(lmg_tbl, 3), "results/appendix/csv/robust_lmg_within.csv")
+
+# ---- NEW: E) Placebo lead (anticipation) ----
+dat_dem <- d_base %>% filter(v2x_polyarchy >= .60)
+rhs_pl <- intersect(c(lag1, lead1, theory_blk, covar_blk), names(dat_dem))
+m_placebo <- fixest::feols(
+  as.formula(paste(dv_main, "~", paste(rhs_pl, collapse=" + "),
+                   "|", paste(id_var, "+", time_var))),
+  data = dat_dem, vcov = vc_id
+)
+capture.output(fixest::etable(m_placebo, se.below=TRUE, digits=3),
+               file = "results/appendix/tables/robust_placebo_lead.txt")
+
+# ---- NEW: F) Two-way clustered SEs (ctry + year) ----
+m_twoc <- fixest::feols(
+  as.formula(paste(dv_main, "~", paste(c(lag1, rhs_covars), collapse=" + "),
+                   "|", paste(id_var, "+", time_var))),
+  data = dat_dem, vcov = as.formula(paste0("~ ", id_var, " + ", time_var))
+)
+capture.output(fixest::etable(m_twoc, se.below=TRUE, digits=3),
+               file = "results/appendix/tables/robust_twoway_cluster.txt")
+
+# ---- OPTIONAL: G) Driscoll–Kraay (if desired) ----
+vars_needed <- unique(c(dv_main, lag1, rhs_covars, id_var, time_var))
+dat_plm <- dat_dem %>% dplyr::select(dplyr::all_of(vars_needed)) %>% tidyr::drop_na()
+if (nrow(dat_plm) > 0) {
+  f_plm <- as.formula(paste(dv_main, "~", paste(c(lag1, rhs_covars), collapse=" + ")))
+  mod_plm <- plm::plm(f_plm, data=dat_plm, index=c(id_var, time_var), model="within", effect="twoways")
+  L <- max(1, floor(mean(table(dat_plm[[id_var]]))^(1/3)))
+  ct <- lmtest::coeftest(mod_plm, vcov.=plm::vcovSCC(mod_plm, type="HC1", maxlag=L))
+  utils::capture.output(print(ct), file="results/appendix/tables/robust_driscoll_kraay.txt")
+}
+
+# ---- NEW: H) Country-specific linear trends ----
+dat_tr <- dat_dem %>% mutate(year_c = .data[[time_var]] - median(.data[[time_var]], na.rm=TRUE))
+f_tr  <- as.formula(paste(
+  dv_main, "~", paste(c(lag1, rhs_covars, paste0("i(", id_var, ", year_c)")), collapse=" + "),
+  "|", paste(id_var, "+", time_var)
+))
+m_tr  <- fixest::feols(f_tr, data=dat_tr, vcov = vc_id)
+capture.output(fixest::etable(m_tr, se.below=TRUE, digits=3),
+               file = "results/appendix/tables/robust_country_trends.txt")
+
+# ---- NEW: I) Leave-one-country-out (jackknife influence) ----
+ctys <- sort(unique(na.omit(dat_dem[[id_var]])))
+loco <- lapply(ctys, function(cc){
+  dd <- dplyr::filter(dat_dem, .data[[id_var]] != cc)
+  m  <- tryCatch(fixest::feols(
+    as.formula(paste(dv_main, "~", paste(c(lag1, rhs_covars), collapse=" + "),
+                     "|", paste(id_var, "+", time_var))),
+    data=dd, vcov = vc_id), error=function(e) NULL)
+  if (is.null(m)) return(NULL)
+  tb <- broom::tidy(m); i <- match(lag1, tb$term)
+  data.frame(drop=cc, beta=tb$estimate[i], se=tb$std.error[i])
+})
+loco <- dplyr::bind_rows(loco)
+readr::write_csv(loco, "results/appendix/csv/robust_loco_baseline.csv")
+
+# ========================= 7) SUMMARY NOTES =========================
+message("All outputs written under 'results/'. Key folders:")
+message("- MAIN (paper):     results/main/{tables,figs,csv}")
+message("- APPENDIX:         results/appendix/{tables,figs,csv}")

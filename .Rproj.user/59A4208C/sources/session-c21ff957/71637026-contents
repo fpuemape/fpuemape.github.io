@@ -1,0 +1,77 @@
+/* Resize profile image to align with text height */
+.about-hero .about-image img {
+  max-width: 250px;
+  height: auto;
+}
+
+/* Align image and text vertically in the about section */
+.about-hero {
+  display: flex;
+  align-items: center;
+}
+
+/* Optional: add spacing between image and text */
+.about-hero .about-image {
+  margin-right: 2rem;
+}
+
+/* Hide the "About" heading below the image */
+.about-hero .about-title {
+  display: none;
+}
+
+/* Change color of specific navbar link (optional) */
+.navbar-nav .nav-link[href="https://osf.io/preprints/osf/5am9q"] {
+  color: #18bc9c !important;
+  font-weight: bold;
+}
+
+/* Change color on hover for that link */
+.navbar-nav .nav-link[href="https://osf.io/preprints/osf/5am9q"]:hover {
+  color: #e74c3c !important;
+}
+
+/* Hide the top page title (e.g., "Curriculum Vitae") */
+.page-title {
+  display: none;
+}
+
+/* ================================
+   Bridge rules for Quarto trestles
+   ================================ */
+
+/* Resize profile image (trestles layout) */
+.quarto-about-trestles .about-image {
+  max-width: 250px !important;
+  height: auto !important;
+  margin-right: 2rem;
+}
+
+/* Align image + text side by side (trestles) */
+.quarto-about-trestles .about-entity {
+  display: flex;
+  align-items: center;
+}
+
+/* Hide Quarto's title block at the top */
+.quarto-title-block .title,
+h1.title.page-title {
+  display: none !important;
+}
+
+/* (Optional) Force a dark navbar background to match live */
+.navbar.navbar-dark {
+  background-color: #212529 !important;
+}
+
+/* === Force Bootstrap default system font stack (matches live look) === */
+:root {
+  --bs-body-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                          "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans",
+                          "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+body {
+  font-family: var(--bs-body-font-family) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
