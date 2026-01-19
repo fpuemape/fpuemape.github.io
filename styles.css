@@ -36,3 +36,35 @@
   display: none;
 }
 
+/* ================================
+   Minimal additions you asked for
+   ================================ */
+
+/* 1) Bigger photo (works for trestles & classic), never shrink */
+.quarto-about-trestles .about-image img,
+img.about-image,
+.about-hero .about-image img {
+  width: 320px !important;       /* bump from 250 → 320 */
+  height: auto !important;
+  max-width: none !important;     /* defeat img-fluid max-width:100% */
+}
+
+.quarto-about-trestles .about-image {
+  margin-right: 2rem;
+  flex-shrink: 0 !important;      /* don’t let flexbox shrink the pic */
+}
+
+/* 2) Hide name/title under the photo in trestles layout */
+.quarto-about-trestles .about-entity .about-title,
+.quarto-about-trestles .about-entity .about-name,
+.quarto-about-trestles .about-entity .about-subtitle,
+.quarto-about-trestles .about-entity h1,
+.quarto-about-trestles .about-entity h2 {
+  display: none !important;
+}
+
+/* 3) (REMOVED) Navbar color overrides
+      — letting Flatly theme control the blue bg-primary.
+      If you still see a black bar, make sure no other CSS sets
+      .navbar { background-color: ... } or --bs-navbar-* variables. */
+
