@@ -5,8 +5,8 @@ about:
   image: felix.jpg
   links:
     - icon: envelope
-      text: "Contact: fpuemape@pucp.edu.pe"
-      href: "mailto:fpuemape@pucp.edu.pe"
+      text: "Contact: fpuemape@nd.edu"
+      href: "mailto:fpuemape@nd.edu"
 format: html
 ---
 
@@ -14,5 +14,5 @@ I hold a Ph.D. in Political Science from Temple University, where I specialized 
 
 My research explores the political determinants of public sector human capital in developing countries—particularly how political instability, executive corruption, ideologies, and socio-political identities shape the recruitment and retention of tertiary-educated professionals for elected and non-elected positions. I employ a mixed-methods approach that combines observational analysis and experimental research.
 
-During the 2025–2026 academic year, I will serve as a visiting scholar at PUCP's Center for Sociological, Economic, Political, and Anthropological Research (CISEPA).
+During the 2026–2027 academic year, I am a Postdoctoral Research Associate at the University of Notre Dame's Department of Sociology.
 
